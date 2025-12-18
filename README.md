@@ -6,4 +6,5 @@
   ```
 - 外部依赖：https://ginnnnnn.top/mooc/
 - 修改配置：编辑`config.py`，按要求填写`termId`、`STUDY_SESS`
-- 一键启动：或运行```python 检查全部.py```
+- 一键启动：或运行
+  `python 检查全部.py`
