@@ -1,7 +1,7 @@
 from config import *
 get_homework_result=lambda tid:post(url_down,{"tid": tid,"withStdAnswerAndAnalyse": False})['result']
 def homework(tid):
-    while not(result:=get_homework_result(tid)):print('可能遇到并发限制，正在重试……',end='\r')
+    while not(result:=get_homework_result(tid)):print('遇并发限制，正在重试……',end='\r')
     answers=[]
     for answer in result["subjectiveQList"]:
         answers+=[{'qid':answer['id'],'type':answer['type'],'content':{
@@ -25,3 +25,4 @@ def has_empty(tid):
 if __name__=='__main__':
     while True:
         homework(input('tid: ')[-10:])
+
