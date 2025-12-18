@@ -2,7 +2,7 @@ import requests
 termId=#填写课程url中的tid
 #前往浏览器登录后获取对应Cookie
 STUDY_SESS='''
-#在此处粘贴STUDY_SESS Cookie
+#在此处粘贴STUDY_SESS Cookie（包含直双引号）
 '''.strip()
 NTESSTUDYSI='0'#非必需
 url_down = "https://www.icourse163.org/web/j/mocQuizRpcBean.getOpenHomeworkPaperDto.rpc"
@@ -21,5 +21,6 @@ params={'csrfKey': NTESSTUDYSI}
 post=lambda url,data:requests.post(url,params=params,headers=headers,cookies=cookies,json=data).json()
 if __name__=='__main__':
     l=open('config.py', 'r', encoding='utf-8').readlines()
-    l[3]=input('STUDY_SESS: ')+'\n'
+    l[4]=input('STUDY_SESS: ')+'\n'
     with open('config.py','w',encoding='utf-8')as f:f.writelines(l)
+
