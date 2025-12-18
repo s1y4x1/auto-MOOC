@@ -1,5 +1,5 @@
 # auto-MOOC
-自动完成MOOC单元测试（依赖ginnnnnn.top）和单元作业。
+自动完成MOOC单元测试和单元作业。
 - 安装`requests`：
   ```powershell
   pip install requests
