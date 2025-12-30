@@ -1,5 +1,5 @@
 # auto-MOOC
-自动检查并完成MOOC单元作业、单元测试和考试*（仅选择题，依赖外部）*。
+自动检查并完成MOOC单元作业、单元测试和考试（*仅选择题，依赖外部*）。
 - 安装`requests`：
   ```powershell
   pip install requests
