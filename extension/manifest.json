@@ -1,0 +1,17 @@
+{
+  "manifest_version": 3,
+  "name": "中国大学MOOC 一键完成助手",
+  "version": "1.0",
+  "description": "自动完成单元测试/单元作业/考试，支持一键完成全部",
+  "host_permissions": [
+    "https://www.icourse163.org/*",
+    "https://ginnnnnn.top/*"
+  ],
+  "content_scripts": [
+    {
+      "matches": ["https://www.icourse163.org/learn/*"],
+      "js": ["content.js"],
+      "run_at": "document_idle"
+    }
+  ]
+}
