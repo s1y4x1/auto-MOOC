@@ -38,6 +38,13 @@
         return 'course';
     }
 
+    function formatTime(ms) {
+        if (!ms) return '无期限';
+        const d = new Date(ms);
+        const pad = n => String(n).padStart(2, '0');
+        return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+    }
+
     /* ============================= API calls ============================= */
 
     async function apiPost(url, data) {
@@ -59,76 +66,103 @@
 
     /* ============================= Actions ============================= */
 
-    async function completeQuiz(tid) {
-        console.log('[mooc-helper] 开始完成单元测试/考试, tid:', tid);
-
-        let extData;
+    async function completeQuiz(tid, info) {
+        log(`📥 获取答案… [${info || tid}]`);
+        let extData, qCount = 0, optCount = 0;
         try {
             extData = await apiGet(API.ANSWER + tid);
+            const qList = extData.data?.questionList || [];
+            qCount = qList.length;
+            optCount = qList.reduce((s, q) => s + (q.optionList || []).filter(o => o.answer).length, 0);
+            log(`答案API: ${qCount} 题, ${optCount} 个正确选项`);
+            if (qCount > 0) {
+                for (const q of qList) {
+                    const opts = (q.optionList || []).filter(o => o.answer).map(o => o.name || o.content || o.id);
+                    log(`  Q: ${q.name || q.id} → ${opts.join(', ') || '无答案'}`);
+                }
+            }
         } catch (e) {
-            console.warn('[mooc-helper] 外部答案API获取失败，使用空答案集', e);
+            log(`⚠ 答案API不可用: ${e.message || e}，使用空答案集`, 'warn');
             extData = { data: { questionList: [] } };
         }
 
-        console.log('[mooc-helper] 获取试卷...');
+        log(`📄 获取试卷…`);
         const paperResp = await apiPost(API.QUIZ_PAPER, { tid });
         const result = paperResp.result;
         if (!result) throw new Error('试卷数据为空');
 
         const correctIds = new Set();
-        const qList = extData.data?.questionList || [];
-        for (const q of qList)
+        for (const q of (extData.data?.questionList || []))
             for (const o of (q.optionList || []))
                 if (o.answer) correctIds.add(o.id);
 
-        console.log('[mooc-helper] 匹配到', correctIds.size, '道正确答案，准备提交');
-        const answers = (result.objectiveQList || []).map(Q => ({
-            qid: Q.id,
-            type: Q.type,
-            optIds: (Q.optionDtos || []).filter(o => correctIds.has(o.id)).map(o => o.id),
-            time: Math.floor(Date.now() / 1000),
-        }));
+        const questions = result.objectiveQList || [];
+        log(`试卷共 ${questions.length} 题`);
+        const answers = questions.map(Q => {
+            const matched = (Q.optionDtos || []).filter(o => correctIds.has(o.id));
+            return {
+                qid: Q.id, type: Q.type,
+                optIds: matched.map(o => o.id),
+                time: Math.floor(Date.now() / 1000),
+            };
+        });
         result.answers = answers;
-        console.log('[mooc-helper] 提交答案...');
-        return apiPost(API.SUBMIT, { paperDto: result, preview: false });
+
+        const matchedCount = answers.filter(a => a.optIds.length > 0).length;
+        log(`📤 提交答案 (${matchedCount}/${answers.length} 题已匹配选项)`);
+        const resp = await apiPost(API.SUBMIT, { paperDto: result, preview: false });
+        log(`✅ 提交成功`, 'ok');
+        if (resp.result) {
+            const s = resp.result;
+            log(`  得分: ${s.score !== undefined ? s.score : '?'}  /  ${s.totalScore !== undefined ? s.totalScore : '?'}`);
+        }
+        console.log('[mooc-helper] 提交响应:', resp);
+        return resp;
     }
 
-    async function completeHomework(tid) {
-        console.log('[mooc-helper] 开始完成单元作业, tid:', tid);
+    async function completeHomework(tid, info) {
+        log(`📄 获取作业… [${info || tid}]`);
         let paper;
         for (let i = 0; i < 10; i++) {
-            console.log('[mooc-helper] 获取作业试卷, 尝试', i + 1);
             const res = await apiPost(API.HW_PAPER, { tid, withStdAnswerAndAnalyse: false });
             if (res.result) { paper = res; break; }
+            log(`  并发限制，重试 (${i + 1}/10)…`, 'warn');
             if (i < 9) await new Promise(r => setTimeout(r, 1000));
         }
         if (!paper) throw new Error('获取作业失败（并发限制）');
         const result = paper.result;
 
-        console.log('[mooc-helper] 构建作业答案...');
-        const answers = (result.subjectiveQList || []).map(a => ({
-            qid: a.id,
-            type: a.type,
-            content: {
-                content: (a.judgeDtos || []).map(j => j.msg).join('\n'),
-                attachments: [],
-            },
-        }));
+        log(`构建答案 (${(result.subjectiveQList || []).length} 道主观题)`);
+        const answers = (result.subjectiveQList || []).map(a => {
+            const texts = (a.judgeDtos || []).map(j => j.msg);
+            log(`  Q: ${a.name || a.id} → ${texts[0] ? texts[0].slice(0, 80) + (texts[0].length > 80 ? '…' : '') : '(空)'}`);
+            return {
+                qid: a.id, type: a.type,
+                content: { content: texts.join('\n'), attachments: [] },
+            };
+        });
         result.answers = answers;
-        console.log('[mooc-helper] 提交作业答案...');
-        return apiPost(API.SUBMIT, { paperDto: result, preview: false });
+        log(`📤 提交答案…`);
+        const resp = await apiPost(API.SUBMIT, { paperDto: result, preview: false });
+        log(`✅ 提交成功`, 'ok');
+        if (resp.result) {
+            const s = resp.result;
+            log(`  得分: ${s.score !== undefined ? s.score : '?'}  /  ${s.totalScore !== undefined ? s.totalScore : '?'}`);
+        }
+        console.log('[mooc-helper] 提交响应:', resp);
+        return resp;
     }
 
-    function completeExam(tid) {
-        console.log('[mooc-helper] 完成考试 (同单元测试逻辑), tid:', tid);
-        return completeQuiz(tid);
+    function completeExam(tid, info) {
+        log(`📝 考试 (同测试逻辑)`);
+        return completeQuiz(tid, info);
     }
 
     /* ============================= UI ============================= */
 
     const style = document.createElement('style');
     style.textContent = `
-        .mh-wrap { position:fixed; top:64px; right:16px; z-index:999999; display:flex; flex-direction:column; gap:8px; }
+        .mh-wrap { position:fixed; top:64px; right:16px; z-index:999999; display:flex; flex-direction:column; gap:8px; max-width:340px; }
         .mh-panel { background:#fff; border:1px solid #e0e0e0; border-radius:8px; padding:12px 16px; box-shadow:0 4px 16px rgba(0,0,0,.12); font:14px/1.5 "Microsoft YaHei",sans-serif; min-width:150px; }
         .mh-btn { display:block; width:100%; padding:8px 14px; margin-bottom:6px; border:none; border-radius:4px; cursor:pointer; font-size:13px; font-weight:600; text-align:center; transition:.15s; }
         .mh-btn:last-child { margin-bottom:0; }
@@ -138,14 +172,17 @@
         .mh-btn-red:hover:not(:disabled) { background:#c9302c; box-shadow:0 2px 8px rgba(228,57,60,.35); }
         .mh-btn-green { background:#52c41a; color:#fff; }
         .mh-btn-green:hover:not(:disabled) { background:#389e0d; box-shadow:0 2px 8px rgba(82,196,26,.35); }
-        .mh-status { font-size:12px; color:#888; word-break:break-all; line-height:1.4; margin-top:4px; }
-        .mh-status.ok    { color:#52c41a; }
-        .mh-status.err   { color:#e4393c; }
-        .mh-status.info  { color:#1890ff; }
+        .mh-log { max-height:260px; overflow-y:auto; font-size:11px; line-height:1.5; margin-top:6px; border-top:1px solid #eee; padding-top:6px; }
+        .mh-log-line { padding:1px 0; color:#555; word-break:break-all; }
+        .mh-log-line.ok   { color:#52c41a; }
+        .mh-log-line.err  { color:#e4393c; }
+        .mh-log-line.info { color:#1890ff; }
+        .mh-log-line.warn { color:#d48806; }
     `;
     document.head.appendChild(style);
 
     let container = null;
+    let logEl = null;
 
     function buildUI() {
         if (container) container.remove();
@@ -155,6 +192,7 @@
         panel.className = 'mh-panel';
         container.appendChild(panel);
         document.body.appendChild(container);
+        logEl = null;
         return panel;
     }
 
@@ -166,13 +204,12 @@
         el.addEventListener('click', async () => {
             el.disabled = true;
             el.textContent = '处理中…';
-            setStatus('');
+            clearLog();
             try {
                 await onClick();
-                setStatus('✅ 提交成功', 'ok');
                 el.textContent = '✅ 已完成';
             } catch (e) {
-                setStatus('❌ ' + (e.message || e), 'err');
+                log('❌ ' + (e.message || e), 'err');
                 el.textContent = text;
                 el.disabled = false;
             }
@@ -180,15 +217,22 @@
         return el;
     }
 
-    function setStatus(msg, cls = '') {
-        let el = container.querySelector('.mh-status');
-        if (!el) {
-            el = document.createElement('div');
-            el.className = 'mh-status';
-            container.querySelector('.mh-panel').appendChild(el);
+    function clearLog() {
+        if (logEl) { logEl.innerHTML = ''; }
+    }
+
+    function log(msg, cls = '') {
+        if (!logEl) {
+            logEl = document.createElement('div');
+            logEl.className = 'mh-log';
+            container.querySelector('.mh-panel').appendChild(logEl);
         }
-        el.textContent = msg;
-        el.className = 'mh-status ' + cls;
+        const line = document.createElement('div');
+        line.className = 'mh-log-line' + (cls ? ' ' + cls : '');
+        line.textContent = msg;
+        logEl.appendChild(line);
+        logEl.scrollTop = logEl.scrollHeight;
+        console.log('[mooc-helper]', msg);
     }
 
     /* ============================= Page handler ============================= */
@@ -197,64 +241,96 @@
         const type = pageType();
         const id   = getId();
         const tid  = getTid();
-        const panel = buildUI();
+        buildUI();
 
         if (type === 'course') {
-            if (!tid) { setStatus('未检测到课程 tid', 'err'); return; }
+            if (!tid) { log('未检测到课程 tid', 'err'); return; }
             btn('一键完成全部', async () => {
-                console.log('[mooc-helper] 获取课程信息...');
+                log(`📡 获取课程信息 (tid=${tid})…`);
                 const res = await apiPost(API.COURSE, { termId: parseInt(tid) });
                 const term = res.result?.mocTermDto;
                 if (!term) throw new Error('获取课程信息失败');
+                const courseName = term.courseName || '(未知课程)';
+                log(`📚 ${courseName}`);
 
                 const chapters = term.chapters || [];
+                log(`共 ${chapters.length} 章`);
                 const items = [];
                 for (const ch of chapters) {
+                    const chName = ch.name || '(未命名章节)';
+                    let hasAny = false;
+
                     for (const hw of (ch.homeworks || [])) {
                         const t = hw.test;
-                        if (t && !(t.deadline && t.deadline < Date.now()))
-                            items.push({ type: 'hw', id: t.id });
+                        if (!t) continue;
+                        const deadline = formatTime(t.deadline);
+                        const isDead = t.deadline && t.deadline < Date.now();
+                        log(`  [${chName}] 📝 ${t.name || '作业'} | 截止:${deadline} | 得分:${t.userScore ?? '?'}/${t.totalScore ?? '?'}${isDead ? ' ⏰已截止' : ''}`);
+                        if (!isDead) {
+                            items.push({ type: 'hw', id: t.id, name: t.name, ch: chName });
+                            hasAny = true;
+                        }
                     }
+
                     for (const q of (ch.quizs || [])) {
                         const t = q.test;
-                        if (t && !(t.deadline && t.deadline < Date.now()) &&
-                            (!t.userScore || t.userScore < t.totalScore))
-                            items.push({ type: 'quiz', id: t.id });
+                        if (!t) continue;
+                        const deadline = formatTime(t.deadline);
+                        const isDead = t.deadline && t.deadline < Date.now();
+                        const fullScore = t.userScore != null && t.totalScore != null && t.userScore >= t.totalScore;
+                        log(`  [${chName}] 📋 ${t.name || '测试'} | 截止:${deadline} | 得分:${t.userScore ?? '?'}/${t.totalScore ?? '?'}${isDead ? ' ⏰已截止' : ''}${fullScore ? ' ✅已满分' : ''}`);
+                        if (!isDead && !fullScore) {
+                            items.push({ type: 'quiz', id: t.id, name: t.name, ch: chName });
+                            hasAny = true;
+                        }
                     }
+
                     const ex = ch.exam?.objectTestVo;
-                    if (ex && !(ex.deadline && ex.deadline < Date.now()) &&
-                        (!ex.userScore || ex.userScore < ex.totalScore))
-                        items.push({ type: 'exam', id: ex.id });
+                    if (ex) {
+                        const deadline = formatTime(ex.deadline);
+                        const isDead = ex.deadline && ex.deadline < Date.now();
+                        const fullScore = ex.userScore != null && ex.totalScore != null && ex.userScore >= ex.totalScore;
+                        log(`  [${chName}] 📝 ${ex.name || '考试'} | 截止:${deadline} | 得分:${ex.userScore ?? '?'}/${ex.totalScore ?? '?'}${isDead ? ' ⏰已截止' : ''}${fullScore ? ' ✅已满分' : ''}`);
+                        if (!isDead && !fullScore) {
+                            items.push({ type: 'exam', id: ex.id, name: ex.name, ch: chName });
+                            hasAny = true;
+                        }
+                    }
+
+                    if (!hasAny) log(`  [${chName}] (无待处理项)`);
                 }
 
                 if (items.length === 0) {
                     throw new Error('没有待完成的任务（均已满分或已截止）');
                 }
 
+                log(`\n🔄 开始处理 ${items.length} 项…`);
                 let done = 0;
                 for (const item of items) {
-                    setStatus(`处理中 (${done + 1}/${items.length})…`, 'info');
-                    console.log('[mooc-helper] 开始处理:', item.type, item.id);
+                    log(`── ${item.ch} / ${item.name || item.id} ──`);
                     try {
-                        if (item.type === 'hw') await completeHomework(item.id);
-                        else await completeQuiz(item.id);
+                        if (item.type === 'hw') await completeHomework(item.id, item.name || item.id);
+                        else if (item.type === 'exam') await completeExam(item.id, item.name || item.id);
+                        else await completeQuiz(item.id, item.name || item.id);
                         done++;
-                        console.log('[mooc-helper] 完成:', item.type, item.id);
+                        log(`✅ ${item.name || item.id} 完成`, 'ok');
                     } catch (e) {
-                        console.error('[mooc-helper] 失败:', item.type, item.id, e);
+                        log(`❌ ${item.name || item.id} 失败: ${e.message || e}`, 'err');
+                        console.error('[mooc-helper] 失败:', item, e);
                     }
                 }
-                setStatus(done === items.length
-                    ? `✅ 全部完成 (${done}/${items.length})`
-                    : `完成 ${done}/${items.length}，${items.length - done} 项失败`,
+                log(done === items.length ? `\n🎉 全部完成 (${done}/${items.length})` : `\n⚠ 完成 ${done}/${items.length}，${items.length - done} 项失败`,
                     done === items.length ? 'ok' : 'err');
             });
         } else if (type === 'quiz' && id) {
+            log(`📋 单元测试页面: id=${id}`);
             btn('完成单元测试', () => completeQuiz(id));
         } else if (type === 'hw' && id) {
+            log(`📝 单元作业页面: id=${id}`);
             btn('完成单元作业', () => completeHomework(id));
         } else if (type === 'exam' && id) {
-            btn('完成考试',     () => completeExam(id));
+            log(`📝 考试页面: id=${id}`);
+            btn('完成考试', () => completeExam(id));
         }
     }
 
