@@ -8,6 +8,7 @@
 // @grant        GM_addStyle
 // @grant        GM_xmlhttpRequest
 // @connect      ginnnnnn.top
+// @connect      www.icourse163.org
 // @run-at       document-end
 // ==/UserScript==
 
@@ -81,22 +82,28 @@
     /* ============================= Actions ============================= */
 
     async function completeQuiz(tid) {
-        const [ext, paper] = await Promise.allSettled([
-            apiGet(API.ANSWER + tid).catch(() => ({ data: { questionList: [] } })),
-            apiPost(API.QUIZ_PAPER, { tid }),
-        ]);
-        if (paper.status !== 'fulfilled') throw new Error('获取试卷失败');
-        const result = paper.value.result;
+        console.log('[mooc-helper] 开始完成单元测试/考试, tid:', tid);
+
+        let extData;
+        try {
+            extData = await apiGet(API.ANSWER + tid);
+        } catch (e) {
+            console.warn('[mooc-helper] 外部答案API获取失败，使用空答案集', e);
+            extData = { data: { questionList: [] } };
+        }
+
+        console.log('[mooc-helper] 获取试卷...');
+        const paperResp = await apiPost(API.QUIZ_PAPER, { tid });
+        const result = paperResp.result;
         if (!result) throw new Error('试卷数据为空');
 
         const correctIds = new Set();
-        if (ext.status === 'fulfilled') {
-            const qList = ext.value.data?.questionList || [];
-            for (const q of qList)
-                for (const o of (q.optionList || []))
-                    if (o.answer) correctIds.add(o.id);
-        }
+        const qList = extData.data?.questionList || [];
+        for (const q of qList)
+            for (const o of (q.optionList || []))
+                if (o.answer) correctIds.add(o.id);
 
+        console.log('[mooc-helper] 匹配到', correctIds.size, '道正确答案，准备提交');
         const answers = (result.objectiveQList || []).map(Q => ({
             qid: Q.id,
             type: Q.type,
@@ -104,19 +111,23 @@
             time: Math.floor(Date.now() / 1000),
         }));
         result.answers = answers;
+        console.log('[mooc-helper] 提交答案...');
         return apiPost(API.SUBMIT, { paperDto: result, preview: false });
     }
 
     async function completeHomework(tid) {
+        console.log('[mooc-helper] 开始完成单元作业, tid:', tid);
         let paper;
         for (let i = 0; i < 10; i++) {
+            console.log('[mooc-helper] 获取作业试卷, 尝试', i + 1);
             const res = await apiPost(API.HW_PAPER, { tid, withStdAnswerAndAnalyse: false });
             if (res.result) { paper = res; break; }
-            await new Promise(r => setTimeout(r, 1000));
+            if (i < 9) await new Promise(r => setTimeout(r, 1000));
         }
         if (!paper) throw new Error('获取作业失败（并发限制）');
         const result = paper.result;
 
+        console.log('[mooc-helper] 构建作业答案...');
         const answers = (result.subjectiveQList || []).map(a => ({
             qid: a.id,
             type: a.type,
@@ -126,10 +137,14 @@
             },
         }));
         result.answers = answers;
+        console.log('[mooc-helper] 提交作业答案...');
         return apiPost(API.SUBMIT, { paperDto: result, preview: false });
     }
 
-    function completeExam(tid) { return completeQuiz(tid); }
+    function completeExam(tid) {
+        console.log('[mooc-helper] 完成考试 (同单元测试逻辑), tid:', tid);
+        return completeQuiz(tid);
+    }
 
     /* ============================= UI ============================= */
 
@@ -207,6 +222,7 @@
         if (type === 'course') {
             if (!tid) { setStatus('未检测到课程 tid', 'err'); return; }
             btn('一键完成全部', async () => {
+                console.log('[mooc-helper] 获取课程信息...');
                 const res = await apiPost(API.COURSE, { termId: parseInt(tid) });
                 const term = res.result?.mocTermDto;
                 if (!term) throw new Error('获取课程信息失败');
@@ -231,15 +247,21 @@
                         items.push({ type: 'exam', id: ex.id });
                 }
 
+                if (items.length === 0) {
+                    throw new Error('没有待完成的任务（均已满分或已截止）');
+                }
+
                 let done = 0;
                 for (const item of items) {
                     setStatus(`处理中 (${done + 1}/${items.length})…`, 'info');
+                    console.log('[mooc-helper] 开始处理:', item.type, item.id);
                     try {
                         if (item.type === 'hw') await completeHomework(item.id);
                         else await completeQuiz(item.id);
                         done++;
+                        console.log('[mooc-helper] 完成:', item.type, item.id);
                     } catch (e) {
-                        console.error('[mooc-helper]', item.type, item.id, e);
+                        console.error('[mooc-helper] 失败:', item.type, item.id, e);
                     }
                 }
                 setStatus(done === items.length
