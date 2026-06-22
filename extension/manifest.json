@@ -9,7 +9,10 @@
   ],
   "content_scripts": [
     {
-      "matches": ["https://www.icourse163.org/learn/*"],
+      "matches": [
+        "https://www.icourse163.org/learn/*",
+        "https://www.icourse163.org/spoc/learn/*"
+      ],
       "js": ["content.js"],
       "run_at": "document_idle"
     }

@@ -5,6 +5,7 @@
 // @description  自动完成单元测试/单元作业/考试，支持一键完成全部
 // @author       You
 // @match        https://www.icourse163.org/learn/*
+// @match        https://www.icourse163.org/spoc/learn/*
 // @grant        GM_addStyle
 // @grant        GM_xmlhttpRequest
 // @connect      ginnnnnn.top
